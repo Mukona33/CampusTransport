@@ -61,7 +61,8 @@ fun DashboardScreen(
         QuickAction("Trip Planner", Icons.Filled.Route),
         QuickAction("Notices", Icons.Filled.Notifications),
         QuickAction("Favourites", Icons.Filled.Favorite),
-        QuickAction("Feedback", Icons.Filled.Feedback)
+        QuickAction("Feedback", Icons.Filled.Feedback),
+        QuickAction("My Drivers", Icons.Filled.PersonPin)
     )
 
     Scaffold(

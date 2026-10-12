@@ -38,7 +38,7 @@ class MainActivity : ComponentActivity() {
 
 fun dashboardFor(userType: String): String = when (userType) {
     "Driver" -> "DriverDashboard"
-    "Transport Coordinator" -> "CoordinatorWeb"
+    "Transport Coordinator", "Residence Manager" -> "CoordinatorWeb" // ✅ Both role names work
     else -> "Dashboard"
 }
 
@@ -59,12 +59,18 @@ fun CampusTransportApp(
         if (user != null) {
             db.collection("users").document(user.uid).get()
                 .addOnSuccessListener { doc ->
-                    userType = doc.getString("userType") ?: "Student"
-                    currentScreen = dashboardFor(userType)
+                    // ✅ If profile was deleted by coordinator → force logout
+                    if (!doc.exists() || doc.getBoolean("deleted") == true) {
+                        auth.signOut()
+                        currentScreen = "Login"
+                    } else {
+                        userType = doc.getString("userType") ?: "Student"
+                        currentScreen = dashboardFor(userType)
+                    }
                 }
                 .addOnFailureListener {
-                    userType = "Student"
-                    currentScreen = "Dashboard"
+                    auth.signOut()
+                    currentScreen = "Login"
                 }
         } else {
             currentScreen = "Login"
@@ -74,7 +80,7 @@ fun CampusTransportApp(
     // ✅ BOTTOM NAV TABS (role-aware)
     val tabScreens = when (userType) {
         "Driver" -> listOf("DriverDashboard", "Routes", "LiveLocation", "Profile")
-        "Transport Coordinator" -> emptyList<String>()
+        "Transport Coordinator", "Residence Manager" -> emptyList<String>()
         else -> listOf("Dashboard", "Routes", "LiveMap", "Profile")
     }
     val showBottomBar = currentScreen in tabScreens
@@ -143,6 +149,7 @@ fun CampusTransportApp(
                             "Favourites" -> currentScreen = "Favourites"
                             "Feedback" -> currentScreen = "Feedback"
                             "Live Map" -> currentScreen = "LiveMap"
+                            "My Drivers" -> currentScreen = "MyDrivers" // ✅ NEW
                             else -> Toast.makeText(context, "Clicked: $actionName", Toast.LENGTH_SHORT).show()
                         }
                     }
@@ -186,9 +193,9 @@ fun CampusTransportApp(
                 )
 
                 // ✅ STUDENT SCREENS
+                "MyDrivers" -> MyDriversScreen(onBack = { currentScreen = dashboardFor(userType) }) // ✅ NEW
                 "LiveMap" -> LiveMapScreen(onBack = { currentScreen = dashboardFor(userType) })
                 "Routes" -> RoutesScreen(onBack = { currentScreen = dashboardFor(userType) })
-                // ⚠️ If your orange ScheduleScreen is in the same package, use: SchedulesScreen(onBack = ...)
                 "Schedules" -> ScheduleScreen(onBack = { currentScreen = dashboardFor(userType) })
                 "TripPlanner" -> TripPlannerScreen(onBack = { currentScreen = dashboardFor(userType) })
                 "Notices" -> NoticesScreen(onBack = { currentScreen = dashboardFor(userType) })

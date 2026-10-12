@@ -1,92 +1,118 @@
-package com.example.campustransport
+package com.example.campustransport // ⚠️ your package
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AddCircle
-import androidx.compose.material.icons.filled.ExitToApp
-import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Schedule
-import androidx.compose.material.icons.filled.ShareLocation
-import androidx.compose.material.icons.filled.Update
-import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.DirectionsBus
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
-import java.util.Calendar
+
+data class DriverInfo(
+    val uid: String = "",
+    val firstName: String = "",
+    val lastName: String = "",
+    val email: String = "",
+    val assignedRoute: String = ""
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DriverDashboardScreen(
-    onLogout: () -> Unit,
-    onActionClick: (String) -> Unit
-) {
-    var userName by remember { mutableStateOf("Driver") }
+fun MyDriversScreen(onBack: () -> Unit) {
+    BackHandler(onBack = onBack)
+
+    val db = FirebaseFirestore.getInstance()
     val uid = FirebaseAuth.getInstance().currentUser?.uid ?: ""
 
-    LaunchedEffect(uid) {
-        if (uid.isNotEmpty()) {
-            FirebaseFirestore.getInstance().collection("users").document(uid).get()
-                .addOnSuccessListener { doc ->
-                    val first = doc.getString("firstName") ?: doc.getString("name") ?: ""
-                    if (first.isNotBlank()) userName = first
+    var myResidence by remember { mutableStateOf("") }
+    var drivers by remember { mutableStateOf<List<DriverInfo>>(emptyList()) }
+    var routeZones by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var routeStatus by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
+    var routeIds by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var liveRouteIds by remember { mutableStateOf<Set<String>>(emptyList().toSet()) }
+
+    // My residence
+    DisposableEffect(uid) {
+        if (uid.isEmpty()) return@DisposableEffect onDispose { }
+        val l = db.collection("users").document(uid)
+            .addSnapshotListener { doc, _ ->
+                myResidence = doc?.getString("residenceZone") ?: ""
+            }
+        onDispose { l.remove() }
+    }
+
+    // All drivers
+    DisposableEffect(Unit) {
+        val l = db.collection("users")
+            .addSnapshotListener { snap, _ ->
+                drivers = snap?.documents?.mapNotNull { d ->
+                    val u = d.data() ?: return@mapNotNull null
+                    if (u["userType"] != "Driver") null else DriverInfo(
+                        uid = d.id,
+                        firstName = u["firstName"] as? String ?: "",
+                        lastName = u["lastName"] as? String ?: "",
+                        email = u["email"] as? String ?: "",
+                        assignedRoute = u["assignedRoute"] as? String ?: ""
+                    )
+                } ?: emptyList()
+            }
+        onDispose { l.remove() }
+    }
+
+    // Routes: zone + status + id per name
+    DisposableEffect(Unit) {
+        val l = db.collection("routes")
+            .addSnapshotListener { snap, _ ->
+                val zones = mutableMapOf<String, String>()
+                val status = mutableMapOf<String, Boolean>()
+                val ids = mutableMapOf<String, String>()
+                snap?.documents?.forEach { d ->
+                    val r = d.toBusRoute()
+                    zones[r.name] = r.zone
+                    status[r.name] = r.isOnTime
+                    ids[r.name] = r.id
                 }
-        }
+                routeZones = zones
+                routeStatus = status
+                routeIds = ids
+            }
+        onDispose { l.remove() }
     }
 
-    val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-    val timeGreeting = when (hour) {
-        in 0..11 -> "Good Morning"
-        in 12..16 -> "Good Afternoon"
-        else -> "Good Evening"
+    // Live sharing routes
+    DisposableEffect(Unit) {
+        val l = db.collection("liveRoutes")
+            .addSnapshotListener { snap, _ ->
+                liveRouteIds = snap?.documents
+                    ?.filter { it.getBoolean("active") == true }
+                    ?.map { it.id }?.toSet() ?: emptySet()
+            }
+        onDispose { l.remove() }
     }
 
-    val actions = listOf(
-        QuickAction("Live Location", Icons.Filled.ShareLocation),
-        QuickAction("Add Route", Icons.Filled.AddCircle),
-        QuickAction("My Schedule", Icons.Filled.Schedule),
-        QuickAction("Update Status", Icons.Filled.Update),
-        QuickAction("Report Issue", Icons.Filled.Warning),
-        QuickAction("Notices", Icons.Filled.Notifications)
-    )
+    // ✅ ONLY drivers whose assigned route's zone == my residence
+    val myDrivers = drivers.filter { d ->
+        d.assignedRoute.isNotEmpty() && routeZones[d.assignedRoute] == myResidence
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Driver Panel", fontWeight = FontWeight.Bold, fontSize = 20.sp) },
-                actions = {
-                    IconButton(onClick = { onActionClick("Notices") }) {
-                        Icon(Icons.Filled.Notifications, contentDescription = "Notifications")
-                    }
-                    IconButton(onClick = onLogout) {
-                        Icon(Icons.Filled.ExitToApp, contentDescription = "Logout")
+                title = { Text("My Drivers", fontWeight = FontWeight.Bold) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -96,60 +122,107 @@ fun DriverDashboardScreen(
             )
         }
     ) { paddingValues ->
-        LazyColumn(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
-            item {
-                Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    text = "$timeGreeting, $userName! 🚌",
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = "Manage your route and keep students updated",
-                    fontSize = 14.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+            Text(
+                text = "Drivers serving: $myResidence 🏘️",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(16.dp)
+            )
 
-            item {
-                Text("Driver Tools", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-                Spacer(modifier = Modifier.height(8.dp))
-            }
-
-            item {
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(2),
-                    contentPadding = PaddingValues(vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.height(280.dp)
+            if (myDrivers.isEmpty()) {
+                Column(
+                    modifier = Modifier.fillMaxSize().padding(32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
                 ) {
-                    items(actions) { action ->
-                        ActionCard(action = action, onClick = { onActionClick(action.title) })
+                    Icon(
+                        imageVector = Icons.Filled.DirectionsBus,
+                        contentDescription = null,
+                        modifier = Modifier.size(72.dp),
+                        tint = MaterialTheme.colorScheme.outline
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("No drivers assigned yet", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Your residence manager will assign drivers to $myResidence soon.",
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                LazyColumn(
+                    contentPadding = PaddingValues(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    items(myDrivers) { driver ->
+                        val isLive = routeIds[driver.assignedRoute] in liveRouteIds
+                        val onTime = routeStatus[driver.assignedRoute] ?: true
+
+                        Card(modifier = Modifier.fillMaxWidth()) {
+                            Row(
+                                modifier = Modifier.padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Surface(
+                                    shape = CircleShape,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(52.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Text(
+                                            text = (driver.firstName.take(1) + driver.lastName.take(1))
+                                                .ifBlank { "D" }.uppercase(),
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onPrimary
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "${driver.firstName} ${driver.lastName}",
+                                        fontSize = 16.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        text = "🚌 ${driver.assignedRoute}",
+                                        fontSize = 13.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Column(horizontalAlignment = Alignment.End) {
+                                    if (isLive) {
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = Color(0xFF4CAF50)
+                                        ) {
+                                            Text(
+                                                text = "LIVE",
+                                                color = Color.White,
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        text = if (onTime) "On Time" else "Delayed",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (onTime) Color(0xFF4CAF50) else Color(0xFFFF9800)
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
-
-            item { Spacer(modifier = Modifier.height(32.dp)) }
-        }
-    }
-}
-
-@Preview(showBackground = true, showSystemUi = true)
-@Composable
-fun DriverDashboardScreenPreview() {
-    MaterialTheme {
-        Surface {
-            DriverDashboardScreen(
-                onLogout = { },
-                onActionClick = { }
-            )
         }
     }
 }

@@ -13,7 +13,6 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-// ✅ ADD THESE IMPORTS
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import androidx.compose.material3.CircularProgressIndicator
@@ -36,7 +35,21 @@ fun RegisterScreen(
     var confirmPassword by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf("") }
 
-    val userTypes = listOf("Student", "Driver", "Transport Coordinator")
+    val userTypes = listOf("Student", "Driver", "Residence Manager")
+
+    // ✅ RESIDENCE ZONE STATES
+    var residenceZone by remember { mutableStateOf("On-Campus") }
+    var residences by remember { mutableStateOf(RESIDENCE_ZONES) }
+    var newResidence by remember { mutableStateOf("") }
+
+    // ✅ Live-load residences from Firestore
+    LaunchedEffect(Unit) {
+        db.collection("residences")
+            .addSnapshotListener { snap, _ ->
+                val extra = snap?.documents?.mapNotNull { it.getString("name") } ?: emptyList()
+                residences = (RESIDENCE_ZONES + extra).distinct()
+            }
+    }
 
     Column(
         modifier = Modifier
@@ -87,7 +100,8 @@ fun RegisterScreen(
         )
 
         Spacer(modifier = Modifier.height(16.dp))
-// ✅ PASTE THIS INSTEAD
+
+        // User Type Dropdown
         var userTypeExpanded by remember { mutableStateOf(false) }
 
         ExposedDropdownMenuBox(
@@ -119,6 +133,52 @@ fun RegisterScreen(
                 }
             }
         }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // ✅ RESIDENCE ZONE DROPDOWN
+        var residenceExpanded by remember { mutableStateOf(false) }
+
+        ExposedDropdownMenuBox(
+            expanded = residenceExpanded,
+            onExpandedChange = { residenceExpanded = !residenceExpanded }
+        ) {
+            OutlinedTextField(
+                value = residenceZone,
+                onValueChange = {},
+                readOnly = true,
+                label = { Text("Residence Zone") },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = residenceExpanded) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .menuAnchor()
+            )
+            ExposedDropdownMenu(
+                expanded = residenceExpanded,
+                onDismissRequest = { residenceExpanded = false }
+            ) {
+                residences.forEach { selectionOption ->
+                    DropdownMenuItem(
+                        text = { Text(selectionOption) },
+                        onClick = {
+                            residenceZone = selectionOption
+                            residenceExpanded = false
+                        }
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // ✅ ADD NEW RESIDENCE FIELD
+        OutlinedTextField(
+            value = newResidence,
+            onValueChange = { newResidence = it },
+            label = { Text("＋ Add new residence (optional)") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true
+        )
 
         Spacer(modifier = Modifier.height(16.dp))
 
@@ -169,6 +229,16 @@ fun RegisterScreen(
                         errorMessage = ""
                         isLoading = true
 
+                        // ✅ Determine final residence
+                        val finalResidence = newResidence.trim().ifBlank { residenceZone }
+
+                        // ✅ Save new residence to Firestore if provided
+                        if (newResidence.trim().isNotEmpty()) {
+                            db.collection("residences")
+                                .document(newResidence.trim())
+                                .set(mapOf("name" to newResidence.trim()))
+                        }
+
                         // 1. Create account in Firebase Auth
                         auth.createUserWithEmailAndPassword(email, password)
                             .addOnCompleteListener { task ->
@@ -181,6 +251,7 @@ fun RegisterScreen(
                                         "lastName" to lastName,
                                         "email" to email,
                                         "userType" to userType,
+                                        "residenceZone" to finalResidence, // ✅ Added
                                         "createdAt" to System.currentTimeMillis()
                                     )
 

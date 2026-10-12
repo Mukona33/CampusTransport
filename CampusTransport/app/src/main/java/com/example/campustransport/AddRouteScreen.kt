@@ -1,4 +1,4 @@
-package com.example.campustransport // ⚠️ Use the SAME package as your other screens
+package com.example.campustransport
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
@@ -32,7 +32,6 @@ fun AddRouteScreen(onBack: () -> Unit) {
     var name by remember { mutableStateOf("") }
     var from by remember { mutableStateOf("") }
     var to by remember { mutableStateOf("UMP Campus") }
-    var zone by remember { mutableStateOf(RESIDENCE_ZONES.first()) }
     var stopsText by remember { mutableStateOf("") }
     var frequency by remember { mutableStateOf("Hourly") }
     var useHourlySchedule by remember { mutableStateOf(true) }
@@ -41,6 +40,23 @@ fun AddRouteScreen(onBack: () -> Unit) {
     var errorMessage by remember { mutableStateOf("") }
     var isSaving by remember { mutableStateOf(false) }
     var saved by remember { mutableStateOf(false) }
+
+    // ✅ DYNAMIC RESIDENCE STATES
+    var residences by remember { mutableStateOf(RESIDENCE_ZONES) }
+    var zone by remember { mutableStateOf(RESIDENCE_ZONES.first()) }
+    var newResidence by remember { mutableStateOf("") }
+
+    // ✅ Live-load residences from Firestore
+    LaunchedEffect(Unit) {
+        db.collection("residences")
+            .addSnapshotListener { snap, _ ->
+                val extra = snap?.documents?.mapNotNull { it.getString("name") } ?: emptyList()
+                residences = (RESIDENCE_ZONES + extra).distinct()
+                if (zone !in residences && residences.isNotEmpty()) {
+                    zone = residences.first()
+                }
+            }
+    }
 
     Scaffold(
         topBar = {
@@ -87,6 +103,7 @@ fun AddRouteScreen(onBack: () -> Unit) {
                         onClick = {
                             name = ""; from = ""; stopsText = ""
                             weekdayText = ""; weekendText = ""
+                            newResidence = ""
                             saved = false
                         }
                     ) { Text("Add Another") }
@@ -139,11 +156,48 @@ fun AddRouteScreen(onBack: () -> Unit) {
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                SingleChoiceDropdown(
-                    label = "Residence Zone",
-                    options = RESIDENCE_ZONES,
-                    selected = zone,
-                    onSelect = { zone = it }
+                // ✅ DYNAMIC RESIDENCE DROPDOWN
+                var residenceExpanded by remember { mutableStateOf(false) }
+
+                ExposedDropdownMenuBox(
+                    expanded = residenceExpanded,
+                    onExpandedChange = { residenceExpanded = !residenceExpanded }
+                ) {
+                    OutlinedTextField(
+                        value = zone,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Residence Zone") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = residenceExpanded) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .menuAnchor()
+                    )
+                    ExposedDropdownMenu(
+                        expanded = residenceExpanded,
+                        onDismissRequest = { residenceExpanded = false }
+                    ) {
+                        residences.forEach { selectionOption ->
+                            DropdownMenuItem(
+                                text = { Text(selectionOption) },
+                                onClick = {
+                                    zone = selectionOption
+                                    residenceExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // ✅ ADD NEW RESIDENCE FIELD
+                OutlinedTextField(
+                    value = newResidence,
+                    onValueChange = { newResidence = it },
+                    label = { Text("＋ Add new residence (optional)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
                 )
 
                 Spacer(modifier = Modifier.height(16.dp))
@@ -228,6 +282,9 @@ fun AddRouteScreen(onBack: () -> Unit) {
                         val weekendTimes = if (useHourlySchedule) hourlyTimes(8, 20, 2)
                         else weekendText.split(",").map { it.trim() }.filter { it.isNotEmpty() }
 
+                        // ✅ Determine final residence
+                        val finalResidence = newResidence.trim().ifBlank { zone }
+
                         when {
                             name.isBlank() || from.isBlank() || to.isBlank() ->
                                 errorMessage = "Please fill route name, from and to"
@@ -239,18 +296,25 @@ fun AddRouteScreen(onBack: () -> Unit) {
                                 errorMessage = ""
                                 isSaving = true
 
+                                // ✅ Save new residence to Firestore if provided
+                                if (newResidence.trim().isNotEmpty()) {
+                                    db.collection("residences")
+                                        .document(newResidence.trim())
+                                        .set(mapOf("name" to newResidence.trim()))
+                                }
+
                                 val route = hashMapOf(
                                     "name" to name.trim(),
                                     "from" to from.trim(),
                                     "to" to to.trim(),
-                                    "zone" to zone,
-                                    "stops" to stopsList,               // ✅ saved as ARRAY
+                                    "zone" to finalResidence, // ✅ Use final residence
+                                    "stops" to stopsList,
                                     "firstBus" to weekdayTimes.first(),
                                     "lastBus" to weekdayTimes.last(),
                                     "frequency" to frequency.trim(),
                                     "isOnTime" to true,
-                                    "weekdaySchedule" to weekdayTimes,  // ✅ saved as ARRAY
-                                    "weekendSchedule" to weekendTimes   // ✅ saved as ARRAY
+                                    "weekdaySchedule" to weekdayTimes,
+                                    "weekendSchedule" to weekendTimes
                                 )
 
                                 db.collection("routes").add(route)
